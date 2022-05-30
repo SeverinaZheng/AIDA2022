@@ -126,7 +126,7 @@ class DBCPostgreSQL(DBC):
         (metaData_, rows) = self._executeQry(sql);
 
         if(rows ==0):
-            logging.error("ERROR: cannot find table {} in {}".format(relName, dbName if(dbName is not None) else self.dbName ));
+            #logging.error("ERROR: cannot find table {} in {}".format(relName, dbName if(dbName is not None) else self.dbName ));
             raise KeyError("ERROR: cannot find table {} in {}".format(relName, dbName if(dbName is not None) else self.dbName ));
         #logging.debug("execute query returned for table metadata {}".format(metaData_));
         #metaData = _collections.OrderedDict();

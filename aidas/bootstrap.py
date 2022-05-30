@@ -7,6 +7,7 @@ from aidacommon.aidaConfig import AConfig;
 from aidacommon import rop;
 import aidas.dmro as dmro;
 import aidas.aidas as aidas;
+import aidas.scheduler as scheduler;
 import aidacommon.gbackend as gbackend;
 
 def bootstrap():
@@ -59,6 +60,9 @@ def bootstrap():
     # Startup the remote object manager for RMI.
     robjMgr = rop.ROMgr.getROMgr('', AConfig.RMIPORT, True);
     aidasys.robjMgr = robjMgr;
+    
+    schMgr = scheduler.ScheduleManager.getScheduleManager();
+    aidasys.schMgr = schMgr;
 
     # Start the connection manager.
     # Get the module and class name separated out for the database adapter that we need to load.
@@ -69,6 +73,7 @@ def bootstrap():
     logging.info('AIDA: Loading database adapter {} for connection manager'.format(dadapt))
     conMgr = aidas.ConnectionManager.getConnectionManager(dadapt);
     aidasys.conMgr = conMgr;
+
 
     #Visualization
     import builtins;

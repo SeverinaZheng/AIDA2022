@@ -286,6 +286,10 @@ class DBCRemoteStub(aidacommon.rop.RObjStub):
         pass
 
     @aidacommon.rop.RObjStub.RemoteMethod()
+    def _Schedule(self,iter_func,cond_func,test_func,*args,**kwargs):
+        pass
+
+    @aidacommon.rop.RObjStub.RemoteMethod()
     def _XP(self, func, *args, **kwargs):
         pass
 

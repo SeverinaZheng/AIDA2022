@@ -6,6 +6,7 @@ import numpy as np
 import psutil
 connection=psycopg2.connect(user='sf01',password='sf01',host='localhost',database='sf01')
 cursor=connection.cursor()
+print(cursor.execute("SELECT pg_backend_pid();"))
 number = 100
 lengthArr = []
 cpuArr = []
