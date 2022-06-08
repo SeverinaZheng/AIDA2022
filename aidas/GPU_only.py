@@ -82,7 +82,9 @@ class ScheduleManager(metaclass=ABCMeta):
                             if(len(self.__GPUQueue)> 0):
                                 deviceID = GPUtil.getFirstAvailable(order = 'last', maxLoad=0.5, maxMemory=0.5, attempts=1)
                                 #incase we have assigned the gpu but the work is not start running
+                                #logging.info(deviceID)
                                 if 1 == deviceID[0] and self.__gpu_free:
+                                    logging.info("here1")
                                     self.__gpu_free = False;
                                     cv = self.__GPUQueue.popleft();
                                     self.invoke_GPU(cv);
@@ -110,10 +112,12 @@ class ScheduleManager(metaclass=ABCMeta):
 
             #try to wake up the scheduler if it's asleep    
             def wake_up(self):
-                succ_acquire = self.__maybe_available.acquire(False);
-                if succ_acquire:
+                with self.__maybe_available:
                     self.__maybe_available.notify();
-                    self.__maybe_available.release();
+                #succ_acquire = self.__maybe_available.acquire(False);
+                #if succ_acquire:
+                #    self.__maybe_available.notify();
+                #    self.__maybe_available.release();
 
             # clean up stuff
             def finish_GPU(self,condition_var,name):
@@ -122,6 +126,7 @@ class ScheduleManager(metaclass=ABCMeta):
                 self.wake_up();
                 if(self.__CPU_inuse_name.count(name) > 0):
                     self.__CPU_inuse_name.remove(name);
+                logging.info(self.__gpu_free);
                 logging.info(name+" finish gpu");
 
             # finish_CPU is called after one task finishes CPU
@@ -150,6 +155,7 @@ class ScheduleManager(metaclass=ABCMeta):
                     logging.info(name+" to tail");
                     self.wake_up();
                     logging.info("end schedule");
+                    logging.info("q_length: "+ str(len(self.__GPUQueue)));
 
             # RR strategy:
             # put a job that cannot be executed on GPU

@@ -1,12 +1,14 @@
 from aida.aida import *;
+import sys;
 import pandas as pd;
 import numpy as np;
 import torch;
 import torch.nn as nn;
 import collections;
-host = 'localhost'; dbname = 'bixi'; user = 'bixi'; passwd = 'bixi'; jobName = 'torchLinear'; port = 55660;
+host = 'yz_Server'; dbname = 'sf01'; user = 'sf01'; passwd = 'sf01'; jobName = 'torchLinear'; port = 55660;
 dw = AIDA.connect(host,dbname,user,passwd,jobName,port);
 
+name = sys.argv[1]
 n = 100000
 df = pd.DataFrame(np.random.randn(n))
 df.columns = ['A']
@@ -77,12 +79,12 @@ dw.normed_train_data = normed_train_data
 dw.train_target = train_target
 dw.normed_test_data = normed_test_data
 dw.test_target = test_target
-dw.epoch_size = 10000
-dw.epoch_batch = 1000
 dw.epoch_done = 0
 dw.criterion = nn.MSELoss()
 model = get_training_model()
 dw.model = model
+dw.epoch_size = int(sys.argv[2])
+dw.epoch_batch = int(sys.argv[3])
 
 
 def trainingLoop(dw):
@@ -118,8 +120,12 @@ def test_model(dw):
     test_target = dw.test_target
     predicted = dw.model(normed_test_data)
     loss = dw.criterion(predicted, test_target)
-    return_mesg = "the loss of the model is: " + str(loss)
+    #return_mesg = "the loss of the model is: " + str(loss)
+    return_mesg = ""
     return return_mesg
 
-return_mesg = dw._Schedule(trainingLoop,condition,test_model)
-print(return_mesg)
+return_mesg = dw._Schedule(trainingLoop,condition,test_model,name)
+f = open("./result.txt", "a")
+f.write(str(return_mesg)+"\n")
+f.close()
+print(name+ " time: " + str(return_mesg))

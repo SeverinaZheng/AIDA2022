@@ -433,7 +433,13 @@ class DBC(metaclass=ABCMeta):
         #Execute the function with this workspace as the argument and return the results if any.
         if(isinstance(func, str)):
             func = super().__getattribute__(func);
-        return func(self, *args, **kwargs);
+        start_time = time.time();
+        pred = func(self, *args, **kwargs);
+        end_time = time.time();
+        rt = end_time - start_time;
+        result = "time: "+ str(rt)+" ; pred: "+ str(pred);
+        return result;
+        #return func(self, *args, **kwargs);
 
     def _Schedule(self,iter_func,cond_func,test_func,name,*args,**kwargs):
         """Function that is called from stub to execute a python function in this workspace between cpu and gpu"""

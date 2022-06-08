@@ -86,10 +86,10 @@ class ScheduleManager(metaclass=ABCMeta):
                                     self.__gpu_free = False;
                                     cv = self.__GPUQueue.popleft();
                                     self.invoke_GPU(cv);
-                                #elif(self.__cpu_free):
-                                #    cv = self.__GPUQueue.popleft();
-                                #    self.invoke_CPU(cv);
-                                #    self.__cpu_free = False;
+                                elif(self.__cpu_free):
+                                    cv = self.__GPUQueue.popleft();
+                                    self.invoke_CPU(cv);
+                                    self.__cpu_free = False;
                                 else:
                                     break;
                             elif(len(self.__CPUQueue)> 0):
@@ -150,7 +150,6 @@ class ScheduleManager(metaclass=ABCMeta):
                     logging.info(name+" to tail");
                     self.wake_up();
                     logging.info("end schedule");
-                    logging.info("q_length: "+ str(len(self.__GPUQueue)));
 
             # RR strategy:
             # put a job that cannot be executed on GPU

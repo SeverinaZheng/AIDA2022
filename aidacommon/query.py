@@ -1,3 +1,4 @@
+from multiprocessing import Pool 
 import logging
 import time
 import psycopg2
@@ -7,15 +8,17 @@ import psutil
 connection=psycopg2.connect(user='sf01',password='sf01',host='localhost',database='sf01')
 cursor=connection.cursor()
 print(cursor.execute("SELECT pg_backend_pid();"))
-number = 100
+number = 10
 lengthArr = []
 cpuArr = []
 index = 1
+
 while True:
     cpu = float(psutil.cpu_percent())
     t1=time.time()
-    cursor.execute("SELECT SUM(l_extendedprice) / 7.0 AS avg_yearly FROM lineitem, part WHERE p_partkey = l_partkey AND p_brand = '[BRAND]' AND p_container = '[CONTAINER]' AND l_quantity < (SELECT 0.2 * AVG(l_quantity) FROM lineitem WHERE l_partkey = p_partkey);")
+    cursor.execute("SELECT SUM(l_extendedprice) / 7.0 AS avg_yearly FROM lineitem, part WHERE p_partkey = l_partkey AND p_brand = 'Brand#13' AND p_container = 'JUMBO BAG' AND l_quantity < 10;")
     length = float(time.time() - t1)
+    print(length)
     lengthArr.append(length)
     cpuArr.append(cpu)
     index  += 1
@@ -27,3 +30,5 @@ while True:
             f.write(str(t1)+','+str(np.mean(lengthArr)) +','+ str(np.mean(cpuArr))+'\n')
         lengthArr = []
         cpuArr = []
+
+
