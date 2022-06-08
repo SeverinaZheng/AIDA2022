@@ -4,9 +4,9 @@ import psycopg2
 logging.basicConfig(level=logging.INFO, filename='query.log')
 import numpy as np
 import psutil
-connection=psycopg2.connect(user='sf01',password='sf01',host='localhost',database='sf01')
+connection=psycopg2.connect(user='sf01',password='sf01',host='yz_Server',database='sf01')
 cursor=connection.cursor()
-print(cursor.execute("SELECT pg_backend_pid();"))
+#print(cursor.execute("SELECT pg_backend_pid();"))
 number = 100
 lengthArr = []
 cpuArr = []
