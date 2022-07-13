@@ -75,6 +75,7 @@ def bootstrap():
     aidasys.conMgr = conMgr;
 
 
+    
     #Visualization
     import builtins;
     import matplotlib;

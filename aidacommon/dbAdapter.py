@@ -15,6 +15,9 @@ import time
 import GPUtil
 import psutil
 import threading
+import multiprocessing
+from multiprocessing import Process
+
 
 import random;
 from io import BytesIO;
@@ -436,10 +439,13 @@ class DBC(metaclass=ABCMeta):
         if(isinstance(func, str)):
             func = super().__getattribute__(func);
         start_time = time.time();
-        pred = func(self, *args, **kwargs);
+        p = Process(target = func, args = (self,))
+        p.start();
+        p.join();
+        #pred = func(self, *args, **kwargs);
         end_time = time.time();
         rt = end_time - start_time;
-        result = "time: "+ str(rt)+" ; pred: "+ str(pred);
+        result = "time: "+ str(rt)
         return result;
         #return func(self, *args, **kwargs);
 
@@ -494,7 +500,7 @@ class DBC(metaclass=ABCMeta):
         result = end_time - start_time
         return result;
 
-    def _fulljob(self,iter_func,cond_func,test_func,name,*args,**kwargs):
+    def _append(self,iter_func,cond_func,test_func,name,*args,**kwargs):
         """Function that is called from stub to execute a python function in this workspace between cpu and gpu"""
         #Execute the function with this workspace as the argument and return the results if any.
         if(isinstance(iter_func, str)):
@@ -504,31 +510,24 @@ class DBC(metaclass=ABCMeta):
         use_gpu = False
         time_limit = 5
         first_round = True
+        start_t = time.time();
 
         condition = threading.Condition();
         with condition:
             logging.info(condition);
-            self._schMgr.add_GPU_head(condition,name);
+            self._schMgr.append_GPU(condition,name,self);
             condition.wait();
-        if(self._schMgr.in_GPU(condition) and first_round):
-            GPU_test=iter_func(TensorWrap_GPU(self),self.epoch_total,time_limit, *args, **kwargs);
-            print(GPU_test)
-            percent_finished = float(GPU_test[1]/self.epoch_total);
-            first_round = False
-            #if the job is short enough to be done in the time_limit on GPU
-            if(percent_finished == 1 or cond_func(self, *args, **kwargs)):
-                result = test_func(TensorWrap_GPU(self), *args, **kwargs);
-                return result;
-            #if the job is relatively short, meaning time_limit has finished large part of it, say 40%,
-            #put it directly to GPU queue with estimate time
-            elif(self.epoch_total > 0 and percent_finished > 0.4):
-                estimate_time = result[0] * self.epoch_total/result[1];
-                self._schMgr.insert_GPU(condition,name,estimate_time);
-            else:
-                #test the iteration could be finished on CPU
-                GPU_test=iter_func(TensorWrap_CPU(self),self.epoch_total,time_limit, *args, **kwargs);
 
-        return result[0]/result[1];
+        st = time.time()
+        iter_func(TensorWrap_GPU(self),self.epoch_total,float('inf'),True, *args, **kwargs);
+        test_func(TensorWrap_GPU(self),True, *args, **kwargs);
+        en = time.time()
+        self._schMgr.finish_GPU_all(self)
+        end_t = time.time();
+
+        return end_t - start_t;
+        #return en - st;
+
 
     def _job(self,iter_func,cond_func,test_func,name,*args,**kwargs):
         """Function that is called from stub to execute a python function in this workspace between cpu and gpu"""
@@ -544,58 +543,127 @@ class DBC(metaclass=ABCMeta):
 
         start_t = time.time();
 
+        logging.info("enter job")
         self._schMgr.coming_test_gpu();
         gpus = GPUtil.getGPUs()
         while(gpus[0].load * 100 > 20):
             time.sleep(1)
-        GPU_test=iter_func(TensorWrap_GPU(self),self.epoch_total,time_limit, *args, **kwargs);
-        print(GPU_test)
+        GPU_test=iter_func(TensorWrap_GPU(self),self.epoch_total,time_limit,True, *args, **kwargs);
+        logging.info(GPU_test)
+        en1 = time.time()
+        logging.info("time for gpu test:" + str(en1-start_t));
         percent_finished = float(GPU_test[1]/self.epoch_total);
+        logging.info("percent:" + str(percent_finished))
         #if the job is short enough to be done in the time_limit on GPU
         if(percent_finished == 1 or cond_func(self, *args, **kwargs)):
+            logging.info("here1")
             result = test_func(TensorWrap_GPU(self), *args, **kwargs);
             self._schMgr.finish_test_gpu();
-            return result;
+            end_t = time.time();
+            return end_t-start_t;
         #if the job is relatively short, meaning time_limit has finished large part of it, say 40%,
         #put it directly to GPU queue with estimate time
         elif(self.epoch_total > 0 and percent_finished > 0.3):
+            logging.info("here2")
             self._schMgr.finish_test_gpu();
             estimate_time = GPU_test[0] * self.epoch_total/GPU_test[1];
             with condition:
                 self._schMgr.insert_GPU(condition,name,self,estimate_time);
                 condition.wait();
         else:
+            logging.info("test on cpu")
             #need to do the CPU test
             self._schMgr.coming_test_cpu();
             psutil.cpu_percent()
-            time.sleep(0.3)
+            time.sleep(0.2)
+            per = psutil.cpu_percent()
             #when current job is not stopped, keep waiting until no one is using cpu
-            while(psutil.cpu_percent() > 20):
+            st2 = time.time()
+            while(per > 20):
+                logging.info("cpu:" + str(per))
+                logging.info("wait for starting test on cpu")
                 time.sleep(1)
-            CPU_test=iter_func(TensorWrap_CPU(self),self.epoch_total,time_limit, *args, **kwargs);
-            print(CPU_test)
-            self._schMgr.finish_test_cpu();
+                per = psutil.cpu_percent()
+            CPU_test=iter_func(TensorWrap_CPU(self),self.epoch_total,time_limit,False,*args, **kwargs);
+            logging.info(CPU_test)
+            en2 = time.time()
+            logging.info("time for cpu test:" + str(en2-st2));
+            logging.info("time till cpu test:" + str(en2-start_t));
             if(float(CPU_test[1]/GPU_test[1]) > 1):
-                print("to cpu")
-                estimate_time = CPU_test[0] * self.epoch_total/CPU_test[1];
-                with condition:
-                    self._schMgr.insert_CPU(condition,name,self,estimate_time);
-                    condition.wait();
+                logging.info("need to go cpu queue")
+                estimate_time = CPU_test[0] * (self.epoch_total - self.epoch_done)/CPU_test[1];
+                self._schMgr.insert_CPU(condition,name,self,estimate_time);
             else:
-                print("to gpu")
-                estimate_time = GPU_test[0] * self.epoch_total/GPU_test[1];
-                with condition:
-                    self._schMgr.insert_GPU(condition,name,self,estimate_time);
-                    condition.wait();
+                estimate_time = GPU_test[0] *(self.epoch_total - self.epoch_done)/GPU_test[1];
+                self._schMgr.insert_GPU(condition,name,self,estimate_time);
+            self._schMgr.finish_test_gpu();
+            self._schMgr.finish_test_cpu();
+            with condition:
+                condition.wait();
+
+
         #after being waken up
-        if(self._schMgr.in_GPU(condition)):
-            print("run on gpu")
-            iter_func(TensorWrap_GPU(self),self.epoch_total - GPU_test[1],float('inf'), *args, **kwargs);
-            test_func(TensorWrap_GPU(self), *args, **kwargs);
-        else:
-            print("run on cpu")
-            iter_func(TensorWrap_CPU(self),self.epoch_total - CPU_test[1],float('inf'), *args, **kwargs);
-            test_func(TensorWrap_CPU(self), *args, **kwargs);
+        def run(func,on_GPU,*args):
+            result = [0,0]
+            if(on_GPU):
+                logging.info(name + "run on gpu")
+                result = func(TensorWrap_GPU(self),*args,True, **kwargs);
+            else:
+                logging.info(name + "run on cpu")
+                result= func(TensorWrap_CPU(self),*args, False, **kwargs);
+            return result;
+
+        def finish(on_GPU,finish_all):
+            if(finish_all):
+                if(on_GPU):
+                    self._schMgr.finish_GPU_all(self)
+                else:
+                    self._schMgr.finish_CPU_all(self)
+            else:
+                if(on_GPU):
+                    self._schMgr.finish_GPU_pause(self,name)
+                else:
+                    self._schMgr.finish_CPU_pause(self,name)
+        
+        on_GPU = self._schMgr.in_GPU(self);
+        st3 = time.time()
+        result = run(iter_func,on_GPU,self.epoch_total - self.epoch_done,float('inf'))  
+        logging.info("pause at epoch:" + str(result[1])+"after "+ str(result[0]))
+        while(self.epoch_total - self.epoch_done > 0 ):
+            finish(on_GPU,False);
+            st4 = time.time()
+            #need to check the testing currently on GPU has finished and the 
+            #corresponding dw has beed added to the queue, then it has the right place to 
+            #put itself in the queue
+            while(self.stop):
+                time.sleep(0.3)
+
+            # recalculate the time
+            if(float(CPU_test[1]/GPU_test[1]) > 1):
+                estimate_time = CPU_test[0] * (self.epoch_total - self.epoch_done)/CPU_test[1];
+                logging.info(name+" time left:"+str(estimate_time))
+                self._schMgr.insert_CPU(condition,name,self,estimate_time);
+            else:
+                estimate_time = GPU_test[0] *(self.epoch_total - self.epoch_done)/GPU_test[1];
+                logging.info(name + "epoch left"+str(self.epoch_total - self.epoch_done))
+                logging.info(name+" time left:"+str(estimate_time))
+                self._schMgr.insert_GPU(condition,name,self,estimate_time);
+            if(on_GPU):
+                self._schMgr.put_back_GPU_to_queue(self)
+            else:
+                self._schMgr.put_back_CPU_to_queue(self)
+            with condition:
+                condition.wait();
+
+
+            en4 = time.time()
+            logging.info("time for waiting:" + str(en4-st4));
+            result = run(iter_func,on_GPU,self.epoch_total - self.epoch_done,float('inf'))
+                #iter_func(TensorWrap_GPU(self),self.epoch_total - self.epoch_done,float('inf'),True, *args, **kwargs);
+        en3 = time.time()
+        logging.info("time for running remaining:" + str(en3-st3));
+        result = run(test_func,on_GPU) 
+        finish(on_GPU,True);
         end_t = time.time();
 
         return end_t - start_t;

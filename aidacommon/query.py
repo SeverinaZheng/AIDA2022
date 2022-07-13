@@ -18,7 +18,6 @@ while True:
     t1=time.time()
     cursor.execute("SELECT SUM(l_extendedprice) / 7.0 AS avg_yearly FROM lineitem, part WHERE p_partkey = l_partkey AND p_brand = '[BRAND]' AND p_container = '[CONTAINER]' AND l_quantity < (SELECT 0.2 * AVG(l_quantity) FROM lineitem WHERE l_partkey = p_partkey);")
     length = float(time.time() - t1)
-    print(length)
     lengthArr.append(length)
     cpuArr.append(cpu)
     index  += 1
@@ -28,7 +27,6 @@ while True:
         # logging.info("start:{}:elapsed:{}".format(t1,np.mean(lengthArr)))
         with open('result_gpu.csv', 'a') as f:
             f.write(str(t1)+','+str(np.mean(lengthArr)) +','+ str(np.mean(cpuArr))+'\n')
-        print(str(np.mean(lengthArr)))
         lengthArr = []
         cpuArr = []
 

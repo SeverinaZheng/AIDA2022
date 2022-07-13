@@ -3,7 +3,9 @@ import signal;
 from collections import deque;
 import threading;
 import GPUtil;
+import psutil;
 import time;
+import bisect;
 from timeloop import Timeloop;
 from datetime import timedelta;
 from tblib import pickling_support;
@@ -27,12 +29,14 @@ class ScheduleManager(metaclass=ABCMeta):
             __RepoLock = threading.RLock();
             __maybe_available_Lock = threading.Lock();
             __maybe_available = threading.Condition(__maybe_available_Lock);
-            __GPUQueue = deque();       # waiting queue for jobs can run both on CPU and GPU
-            __CPUQueue = deque();       # waiting queue for jobs can only run on CPU
+            __GPUQueue = [];       # [DBC,cv] waiting queue for jobs can run both on CPU and GPU
+            __CPUQueue = [];       # [DBC,cv] waiting queue for jobs can only run on CPU
             __GPU_inuse = deque();      # a cv queue: the job using the GPU, for
             __CPU_inuse = deque();      # a cv queue: the task using the CPU
                                         # these 2 queues are used when checking if the job/task
                                         # should go to CPU or GPU 
+            __GPU_paused = deque();
+            __CPU_paused = deque();
             __CPU_inuse_name = deque(); # a string queue: since different task from same job use 
                                         # different cv, need a queue to record the job name
                                         # to insert next task to the head of GPUQ in 
@@ -75,35 +79,37 @@ class ScheduleManager(metaclass=ABCMeta):
                     logging.info("add to head scheduler is running");
 
                     while(True):
-                        with self.__maybe_available:
-                            while((not self.__gpu_free and not self.__cpu_free) or (len(self.__GPUQueue)== 0 and len(self.__CPUQueue)== 0)):
-                                self.__maybe_available.wait();
-                        #incase too quick to send another request 
-                        #before the former is really start working
-                        while(len(self.__GPUQueue)> 0):
-                            if(len(self.__GPUQueue)> 0):
-                                deviceID = GPUtil.getFirstAvailable(order = 'last', maxLoad=0.5, maxMemory=0.5, attempts=1)
-                                #incase we have assigned the gpu but the work is not start running
-                                if 1 == deviceID[0] and self.__gpu_free:
+                        while(len(self.__GPU_paused) == 0 and len(self.__CPU_paused) == 0 and (len(self.__GPUQueue)> 0 or len(self.__CPUQueue)> 0)):
+                            occupied = True
+                            deviceID = GPUtil.getFirstAvailable(order = 'last', maxLoad=0.5, maxMemory=0.5, attempts=1)
+                            logging.info("begin schedule")
+                            logging.info(str( len(self.__GPUQueue)))
+                            logging.info(str(deviceID[0]))
+                            logging.info(self.__gpu_free)
+                            #incase we have assigned the gpu but the work is not start running
+                            if len(self.__GPUQueue)> 0 and 1 == deviceID[0] and self.__gpu_free:
                                     self.__gpu_free = False;
-                                    cv = self.__GPUQueue.popleft();
-                                    self.invoke_GPU(cv);
-                                elif(self.__cpu_free):
-                                    cv = self.__GPUQueue.popleft();
-                                    self.invoke_CPU(cv);
+                                    triple = self.__GPUQueue.pop(0);
+                                    logging.info("poped from gpu queue");
+                                    self.invoke_GPU(triple[1],triple[2]);
+                                    occupied = False;
+                            if(len(self.__CPUQueue)> 0 and self.__cpu_free):
+                                    triple = self.__CPUQueue.pop(0);
+                                    logging.info("poped from cpu queue")
+                                    self.invoke_CPU(triple[1],triple[2]);
                                     self.__cpu_free = False;
-                                else:
+                                    occupied = False;
+                            if(occupied):
                                     break;
-                            elif(len(self.__CPUQueue)> 0):
-                                if(self.__cpu_free):
-                                    cv = self.__CPUQueue.popleft();
-                                    self.invoke_CPU(cv);
-                                    self.__cpu_free = False;
+                            logging.info("short snap")
+                            time.sleep(1)
+                        time.sleep(1)
 
 
                 def check_q_length(self):
                     while(True):
-                        logging.info("queue length:"+ str(len(self.__GPUQueue)));
+                        #logging.info("queue length:"+ str(len(self.__GPUQueue)));
+                        logging.info("cpu util:" + str(psutil.cpu_percent()))
                         time.sleep(5)
 
                 #Handle signals to exit gracefully.
@@ -115,9 +121,9 @@ class ScheduleManager(metaclass=ABCMeta):
                 self.__srvrThread = threading.Thread(target=activate_by_job,args=(self,));
                 self.__srvrThread.daemon = True;
                 self.__srvrThread.start();
-                #self.__checkLengthThread = threading.Thread(target=check_q_length,args=(self,));
-                #self.__checkLengthThread.daemon = True;
-                #self.__checkLengthThread.start();
+                self.__checkLengthThread = threading.Thread(target=check_q_length,args=(self,));
+                self.__checkLengthThread.daemon = True;
+                self.__checkLengthThread.start();
 
             #try to wake up the scheduler if it's asleep    
             def wake_up(self):
@@ -126,96 +132,127 @@ class ScheduleManager(metaclass=ABCMeta):
                     self.__maybe_available.notify();
                     self.__maybe_available.release();
 
-            # clean up stuff
-            def finish_GPU(self,condition_var,name):
-                self.__GPU_inuse.remove(condition_var);
+            # called when a job is interrupted, release control of gpu
+            def finish_GPU_pause(self,dw,name):
+                self.__GPU_inuse.remove(dw);
+                self.__GPU_paused.append(dw);
                 self.__gpu_free = True;
-                self.wake_up();
-                if(self.__CPU_inuse_name.count(name) > 0):
-                    self.__CPU_inuse_name.remove(name);
+                logging.info("now Gpu queue" + str(len(self.__GPU_inuse)))
                 logging.info(name+" finish gpu");
-
-            # finish_CPU is called after one task finishes CPU
-            # while cleanup_CPU is called when the whole job is finished
-            # totally on CPU, i.e. all tasks are in CPU,
-            # none of them goes to GPU
-            def finish_CPU(self,condition_var,name):
-                self.__CPU_inuse.remove(condition_var);
-                if(self.__CPU_inuse_name.count(name) == 0):
-                    self.__CPU_inuse_name.append(name);
-                self.__cpu_free = True;
-                self.wake_up();
-                logging.info(name+" finish cpu");
-                logging.info(self.__CPU_inuse.count(condition_var));
-
-            def cleanup_CPU(self,name):
-                if(self.__CPU_inuse_name.count(name) > 0):
-                    self.__CPU_inuse_name.remove(name);
             
+            #called when a job is reput to the queue after paused
+            def put_back_GPU_to_queue(self,dw):
+                self.__GPU_paused.remove(dw);
+
+            # called when a job is totally finished
+            def finish_GPU_all(self,dw):
+                if(self.__GPU_inuse.count(dw) > 0):
+                    self.__GPU_inuse.remove(dw);
+                if(self.__GPU_paused.count(dw) > 0):
+                    self.__GPU_paused.remove(dw);
+                self.__gpu_free = True;
+
+            def finish_CPU_pause(self,dw,name):
+                self.__CPU_inuse.remove(dw);
+                self.__CPU_paused.append(dw);
+                self.__cpu_free = True;
+                logging.info(name+" finish cpu");
+
+            def put_back_CPU_to_queue(self,dw):
+                self.__CPU_paused.remove(dw);
+
+            def finish_CPU_all(self,dw):
+                if(self.__CPU_inuse.count(dw) > 0):
+                    self.__CPU_inuse.remove(dw);
+                if(self.__CPU_paused.count(dw) > 0):
+                    self.__CPU_paused.remove(dw);
+                self.__cpu_free = True;
 
             # RR strategy:
             # put a job that can be executed on GPU
-            def schedule_GPU(self, condition_var,name):
+            def insert_GPU(self,condition,name,dw,estimate_time):
                 with __ScheduleManager.__RepoLock:
-                    self.__GPUQueue.append(condition_var);
-                    logging.info(name+" to tail");
+                    bisect.insort(self.__GPUQueue,(estimate_time,condition,dw));
+                    logging.info(name+"put to gpu queue");
                     self.wake_up();
-                    logging.info("end schedule");
 
             # RR strategy:
             # put a job that cannot be executed on GPU
-            def schedule_CPU(self, condition_var):
+            def insert_CPU(self,condition,name,dw,estimate_time):
                 with __ScheduleManager.__RepoLock:
-                    self.__CPUQueue.append(condition_var);
+                    bisect.insort(self.__CPUQueue,(estimate_time,condition,dw));
+                    logging.info(name+"put to cpu queue");
+                    for tuples in self.__CPUQueue: 
+                        logging.info(tuples[0]);
+                    logging.info("cpu q length"+ str(len(self.__CPUQueue)))
+                    self.wake_up();
+
+            def append_CPU(self,condition,name,dw):
+                with __ScheduleManager.__RepoLock:
+                    self.__CPUQueue.append((0,condition,dw));
+                    logging.info(name+"put to cpu queue");
+                    self.wake_up();
+
+            def append_GPU(self,condition,name,dw):
+                with __ScheduleManager.__RepoLock:
+                    self.__GPUQueue.append((0,condition,dw));
+                    logging.info(name+"put to gpu queue");
                     self.wake_up();
 
 
-            def in_GPU(self,condition_var):
-                if(self.__GPU_inuse.count(condition_var) > 0):
+            def in_GPU(self,dw):
+                if(self.__GPU_inuse.count(dw) > 0):
                     return True;
                 else: return False;
 
-            def invoke_GPU(self,cv):
-                self.__GPU_inuse.append(cv);
+            def invoke_GPU(self,cv,dw):
+                self.__GPU_inuse.append(dw);
                 while(not cv.acquire()):
                     pass;
                 cv.notify();
                 cv.release();
-                logging.info("to GPU");
+                logging.info("send job to GPU");
 
 
-            def invoke_CPU(self,cv):
+            def invoke_CPU(self,cv,dw):
                 #tasks in GPUQueue has higher priority
-                self.__CPU_inuse.append(cv);
+                self.__CPU_inuse.append(dw);
                 while(not cv.acquire()):
                     pass;
                 cv.notify();
                 cv.release();
-                logging.info("to CPU");
+                logging.info("send job to CPU");
 
             def coming_test_gpu(self):
+                logging.info("try to test gpu")
                 self.__GPU_test_job += 1;
                 if(self.__GPU_test_job == 1):
-                    for entity in self.__GPU_inuse:
-                        entity[0].stop = True;
+                    logging.info("dw to stop:" + str(len(self.__GPU_inuse)))
+                    for dw in self.__GPU_inuse:
+                        logging.info("pause dw:" + str(dw))
+                        dw.stop = True;
 
             def finish_test_gpu(self):
                 self.__GPU_test_job -= 1;
                 if(self.__GPU_test_job == 0):
-                    for entity in self.__GPU_inuse:
-                        entity[0].stop = False;
+                    logging.info("resume current gpu job")
+                    for dw in self.__GPU_paused:
+                        dw.stop = False;
 
             def coming_test_cpu(self):
                 self.__CPU_test_job += 1;
                 if(self.__CPU_test_job == 1):
-                    for entity in self.__CPU_inuse:
-                        entity[0].stop = True;
+                    logging.info("pause current cpu job")
+                    logging.info(str(len(self.__CPU_inuse)))
+                    for dw in self.__CPU_inuse:
+                        logging.info("pause dw:" + str(dw))
+                        dw.stop = True;
 
             def finish_test_cpu(self):
                 self.__CPU_test_job -= 1;
                 if(self.__CPU_test_job == 0):
-                    for entity in self.__CPU_inuse:
-                        entity[0].stop = False;
+                    for dw in self.__CPU_paused:
+                        dw.stop = False;
 
 
             def close(self):
