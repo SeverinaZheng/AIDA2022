@@ -439,15 +439,12 @@ class DBC(metaclass=ABCMeta):
         if(isinstance(func, str)):
             func = super().__getattribute__(func);
         start_time = time.time();
-        p = Process(target = func, args = (self,))
-        p.start();
-        p.join();
         #pred = func(self, *args, **kwargs);
         end_time = time.time();
         rt = end_time - start_time;
         result = "time: "+ str(rt)
-        return result;
-        #return func(self, *args, **kwargs);
+        #return result;
+        return func(self, *args, **kwargs);
 
     def _Schedule(self,iter_func,cond_func,test_func,name,*args,**kwargs):
         """Function that is called from stub to execute a python function in this workspace between cpu and gpu"""
