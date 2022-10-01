@@ -82,7 +82,7 @@ def get_training_model(inFeatures, hiddenDim=16, nbClasses=1):
 
 dw._X(process,new_aapl_df)
 get_data_end = time.time()
-#print("data retrieval time:"+str(get_data_end -get_data_start))
+print("data retrieval time:"+str(get_data_end -get_data_start))
 dw.epoch_done = 0
 dw.criterion = nn.MSELoss()
 model = get_training_model(dw.inFeatures)
@@ -91,7 +91,6 @@ dw.stop = False
 
 
 def iterate(dw,iter_num,time_limit,using_GPU):
-    psutil.cpu_percent()
     model = dw.model
     optimizer = torch.optim.RMSprop(model.parameters(), lr=0.001)
     normed_train_data = dw.normed_train_data
@@ -139,8 +138,8 @@ def test_model(dw,using_GPU):
     return return_mesg
 
 #return_mesg = dw._X(iterate,dw.epoch_total,1000000000,False)
-#return_mesg = dw._append(iterate,condition,test_model,name)
-return_mesg = dw._job(iterate,condition,test_model,name)
+return_mesg = dw._append(iterate,condition,test_model,name)
+#return_mesg = dw._job(iterate,condition,test_model,name)
 print(name+ " time: " + str(return_mesg))
 with open('30_rt.csv', 'a') as f:
             f.write(str(return_mesg)+'\n')

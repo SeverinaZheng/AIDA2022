@@ -40,5 +40,5 @@ def process(self,data):
     self.x = x
 dw._X(process,new_lineitem_df)
 
-timeUsed = dw._KMeans(10, 10)
+timeUsed = dw._KMeans(300, 200)
 print(timeUsed)

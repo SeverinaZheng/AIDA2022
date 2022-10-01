@@ -583,6 +583,9 @@ class DBC(metaclass=ABCMeta):
 
         def trainingLoop(dw,iter_num,time_limit,using_GPU):
             start = time.time()
+            if(dw.reschedule):
+                gpus = GPUtil.getGPUs()
+                return [(time.time() - start),num_finish,gpus[1].load*100,psutil.cpu_percent()]
             cl = dw.cl
             c = dw.c
             print(c)
@@ -609,15 +612,18 @@ class DBC(metaclass=ABCMeta):
             pass
         return self._job(trainingLoop, Condition, Testing, "kmeans")
 
-
-    def _NN(self, model, forward, criterion, optimizer, epochs, name, *args, **kwargs):
+    def _NN(self, model, forward, criterion, optimizer, epochs, name, loss_limit=None, *args, **kwargs):
         self.epoch_done = 0
-        self.epoch_total = epochs
+        self.loss_limit = loss_limit
+        if(epochs != None):
+            self.epoch_total = epochs
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
-        self.epochs = epochs
+        #self.epochs = epochs
         self.stop = False
+        self.loss = 100000000000000
+        self.loss_arr = []
         model.forward = MethodType(forward, model)
         def iterate(dw,iter_num,time_limit,using_GPU):
             psutil.cpu_percent()
@@ -630,13 +636,24 @@ class DBC(metaclass=ABCMeta):
             start = time.time()
             num_finish = 0;
 
+            if(dw.reschedule):
+                gpus = GPUtil.getGPUs()
+                return [(time.time() - start),num_finish,gpus[1].load*100,psutil.cpu_percent()]
             for i in range (iter_num):
                 if(time.time() - start < time_limit):
+                    model = self.model
                     predicted = model(x_train)
                     loss = criterion(predicted, y_train)
-                    loss.backward()
-                    optimizer.step()
-                    optimizer.zero_grad()
+                    self.loss = loss.item()
+                    self.loss_arr.append(self.loss)
+                    if self.loss_limit != None and self.loss <= self.loss_limit:
+                        dw.stop = True
+                    else:
+                        loss.backward()
+                        optimizer.step()
+                        optimizer.zero_grad()
+                        self.model = model
+
                 else:
                     num_finish = i;
                     break;
@@ -654,24 +671,33 @@ class DBC(metaclass=ABCMeta):
             return [(time.time() - start),num_finish,gpus[1].load*100,float(psutil.cpu_percent())]
 
         def condition(dw, using_GPU):
-            if dw.epoch_done >= dw.epoch_total:
-                return True
+            dw.testFunc = 1
+            logging.info("testFunc: " + str(dw.testFunc))
+            if dw.loss_limit == None:
+                if dw.epoch_done >= dw.epoch_total:
+                    return True
+                else:
+                    return False
+
             else:
-                return False
+                if dw.loss <= dw.loss_limit:
+                    return True
+                else:
+                    return False
 
         def test_model(dw, using_GPU):
 
-            #if self.x_test == None or self.y_test == None:
-                #return "No x_test or y_test provided"
+           #if self.x_test == None or self.y_test == None:
+               #return "No x_test or y_test provided"
             x_test = dw.x_test
             y_test = dw.y_test
             predicted = dw.model(x_test)
             loss = dw.criterion(predicted,y_test)
-            #return_mesg = "the loss of the model is: " + str(loss)
             return_mesg = ""
             return return_mesg
 
         return self._job(iterate, condition, test_model, name)
+
 
     def _job(self,iter_func,cond_func,test_func,name,*args,**kwargs):
         """Function that is called from stub to execute a python function in this workspace between cpu and gpu"""
@@ -685,7 +711,9 @@ class DBC(metaclass=ABCMeta):
         first_round = True
         condition = threading.Condition();
         self.stop = False
+        self.reschedule = False
         LARGE_NUM =  10000000000 
+        time_stamp = time.time()
         epoch_total = LARGE_NUM # a random large int
         try:
             epoch_total =self.epoch_total
@@ -708,7 +736,7 @@ class DBC(metaclass=ABCMeta):
         if(time_limit < 1 ):
             time_limit = 1
         start_gpu = time.time()
-        #logging.info("test start at:"+ str(start_gpu))
+        logging.info("test start at:"+ str(start_gpu))
         GPU_test=iter_func(TensorWrap_GPU(self),epoch_total,time_limit,True, *args, **kwargs);
         logging.info("gpu util:"+str(GPU_test))
         en_gpu = time.time()
@@ -728,7 +756,7 @@ class DBC(metaclass=ABCMeta):
             estimate_time = GPU_test[0] *(self.epoch_total - self.epoch_done)/GPU_test[1];
             #logging.info(name+" wait for schedule(most part) "+str(time.time()))
             with condition:
-                self._schMgr.insert_GPU(condition,name,self,estimate_time,GPU_test[2],GPU_test[3]);
+                self._schMgr.insert_GPU(condition,name,self,estimate_time,GPU_test[2],GPU_test[3],time_stamp);
                 condition.wait();
         else:
             logging.info("test on cpu")
@@ -764,10 +792,10 @@ class DBC(metaclass=ABCMeta):
                 logging.info("gpu"+ str(GPU_test[0] *self.epoch_total/GPU_test[1]))
                 if(float(exec_on_GPU_time/exec_on_CPU_time) > 1):
                     logging.info("need to go cpu queue")
-                    self._schMgr.insert_CPU(condition,name,self,estimate_time_CPU,CPU_test[2],CPU_test[3]);
+                    self._schMgr.insert_CPU(condition,name,self,estimate_time_CPU,CPU_test[2],CPU_test[3],time_stamp);
                 else:
                     logging.info("need to go gpu queue")
-                    self._schMgr.insert_GPU(condition,name,self,estimate_time_GPU,GPU_test[2],GPU_test[3]);
+                    self._schMgr.insert_GPU(condition,name,self,estimate_time_GPU,GPU_test[2],GPU_test[3],time_stamp);
             else:
                 #unknown
                 if(float(CPU_test[1]/CPU_test[0]) > float(GPU_test[1]/GPU_test[0])):
@@ -776,7 +804,7 @@ class DBC(metaclass=ABCMeta):
                     self._schMgr.insert_GPU_long(condition,name,self,GPU_test[2],GPU_test[3]);
             self._schMgr.finish_test_gpu();
             self._schMgr.finish_test_cpu();
-            #logging.info(name+" wait for schedule(after cpu test) "+str(time.time()))
+            logging.info(name+" wait for schedule(after cpu test) "+str(time.time()))
             with condition:
                 condition.wait();
 
@@ -832,7 +860,7 @@ class DBC(metaclass=ABCMeta):
             # recalculate the time
             if(CPU_test[0] == -1):
                 estimate_time = GPU_test[0] *(self.epoch_total - self.epoch_done)/GPU_test[1];
-                self._schMgr.insert_GPU(condition,name,self,estimate_time,GPU_test[2],GPU_test[3]);
+                self._schMgr.insert_GPU(condition,name,self,estimate_time,GPU_test[2],GPU_test[3],time_stamp);
 
             elif(epoch_total != LARGE_NUM):
                 estimate_time_CPU = CPU_test[0] * (self.epoch_total - self.epoch_done)/CPU_test[1];
@@ -840,9 +868,9 @@ class DBC(metaclass=ABCMeta):
                 exec_on_CPU_time = self._schMgr.get_CPU_waiting(estimate_time_CPU);
                 exec_on_GPU_time = self._schMgr.get_GPU_waiting(estimate_time_GPU);
                 if(float(exec_on_GPU_time/exec_on_CPU_time) > 1):
-                    self._schMgr.insert_CPU(condition,name,self,estimate_time_CPU,CPU_test[2],CPU_test[3]);
+                    self._schMgr.insert_CPU(condition,name,self,estimate_time_CPU,CPU_test[2],CPU_test[3],time_stamp);
                 else:
-                    self._schMgr.insert_GPU(condition,name,self,estimate_time_GPU,GPU_test[2],GPU_test[3]);
+                    self._schMgr.insert_GPU(condition,name,self,estimate_time_GPU,GPU_test[2],GPU_test[3],time_stamp);
             else:
                 if(not on_GPU):
                     self._schMgr.insert_CPU_long(condition,name,self,CPU_test[2],CPU_test[3]);

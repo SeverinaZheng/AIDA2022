@@ -15,7 +15,7 @@ cpuArr = []
 index = 1
 t_start = time.time()
 print(str(float(t_start)))
-while (time.time() - t_start < 15):
+while (time.time() - t_start < 11):
     cpu = float(psutil.cpu_percent())
     t1=time.time()
     #cpu: 4%

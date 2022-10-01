@@ -1,4 +1,6 @@
 import pandas as pd
+import faulthandler
+faulthandler.enable()
 import torch
 import time
 import numpy as np

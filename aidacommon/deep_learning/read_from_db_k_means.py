@@ -22,7 +22,7 @@ name = sys.argv[1]
 Niter = int(sys.argv[2])
 
 st_data = time.time()
-new_lineitem_df= dw.lineitem.project(('l_quantity', 'l_extendedprice')).filter(Q('l_quantity',2,CMP.LT))
+new_lineitem_df= dw.lineitem.project(('l_quantity', 'l_extendedprice')).filter(Q('l_quantity',7,CMP.LT))
 #new_lineitem_df= dw.lineitem.project(('l_quantity', 'l_extendedprice')).head(head_num)
 en_1 = time.time()
 print("read to aida:"+str(en_1-st_data))
